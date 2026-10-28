@@ -49,7 +49,10 @@ test('updating needs at least one field, and sends the id with the changes', asy
 	});
 	await assert.rejects(
 		run(empty),
-		(e) => e instanceof NodeOperationError && /at least one field/.test(e.message),
+		(e) =>
+			e instanceof NodeOperationError &&
+			/Nothing to update/.test(e.message) &&
+			/'Update Fields'/.test(e.description),
 	);
 
 	const ctx = executeContext({
@@ -186,18 +189,22 @@ test('tasks keep the due date and time exactly as entered', async () => {
 	]);
 });
 
-test('notes go to the contact timeline, and call analysis is fetched by call id', async () => {
+test('notes go to the picked contact’s timeline, and call analysis is fetched by the picked call', async () => {
 	const ctx = executeContext({
 		items: [
 			{
 				resource: 'note',
 				operation: 'create',
-				contactId: 5,
+				contactId: { __rl: true, mode: 'id', value: '5' },
 				type: 'SITE_VISIT',
 				title: 'Visited site',
 				additionalFields: { description: 'Liked plot 4' },
 			},
-			{ resource: 'call', operation: 'getAnalysis', callId: '77' },
+			{
+				resource: 'call',
+				operation: 'getAnalysis',
+				callId: { __rl: true, mode: 'list', value: '77' },
+			},
 		],
 		respond: () => ({ data: { ok: true } }),
 	});
@@ -214,7 +221,7 @@ test('notes go to the contact timeline, and call analysis is fetched by call id'
 			},
 			qs: undefined,
 		},
-		{ method: 'GET', url: `${API}/analysis`, body: undefined, qs: { call_id: '77' } },
+		{ method: 'GET', url: `${API}/analysis`, body: undefined, qs: { call_id: 77 } },
 	]);
 });
 
@@ -253,4 +260,88 @@ test('picklists load the workspace’s own CRM stages', async () => {
 	]);
 	assert.deepEqual(await node.methods.loadOptions.getPriorities.call(ctx), []);
 	assert.equal(ctx.requests[0].url, `${API}/crm/config`);
+});
+
+test('a picked ID that is not a number stops the item before anything is sent', async () => {
+	const ctx = executeContext({
+		items: [
+			{
+				resource: 'task',
+				operation: 'update',
+				taskId: { __rl: true, mode: 'id', value: 'abc' },
+				updateFields: { status: 'COMPLETED' },
+			},
+		],
+		respond: () => assert.fail('nothing should be sent'),
+	});
+	await assert.rejects(
+		run(ctx),
+		(e) =>
+			e instanceof NodeOperationError &&
+			e.message === "'abc' in 'Task' is not a CallSync ID" &&
+			/numeric ID/.test(e.description),
+	);
+});
+
+test('record pickers search contacts and calls page by page, and list pending tasks', async () => {
+	const contacts = executeContext({
+		items: [],
+		respond: (o) => ({
+			data: Array.from({ length: o.qs.page === 1 ? 10 : 2 }, (_, i) => ({
+				id: o.qs.page * 100 + i,
+				name: i ? `Asha ${i}` : '',
+				phone: '+919876543210',
+			})),
+			total: 12,
+		}),
+	});
+	const search = node.methods.listSearch;
+	const first = await search.searchContacts.call(contacts, 'asha');
+	assert.equal(first.results.length, 10);
+	assert.deepEqual(first.results[0], { name: '+919876543210', value: '100' });
+	assert.deepEqual(first.results[1], { name: 'Asha 1 · +919876543210', value: '101' });
+	assert.equal(first.paginationToken, '2');
+	const last = await search.searchContacts.call(contacts, 'asha', first.paginationToken);
+	assert.equal(last.paginationToken, undefined);
+	assert.deepEqual(
+		contacts.requests.map((r) => [r.url, r.qs]),
+		[
+			[`${API}/crm/contacts`, { page: 1, limit: 10, search: 'asha' }],
+			[`${API}/crm/contacts`, { page: 2, limit: 10, search: 'asha' }],
+		],
+	);
+
+	const calls = executeContext({
+		items: [],
+		respond: () => ({
+			data: [
+				{
+					id: 7,
+					direction: 'missed',
+					time: '2026-10-28T09:15:42Z',
+					caller: { name: 'Unknown', phone: '+911234' },
+				},
+			],
+			pagination: { total: 1 },
+		}),
+	});
+	assert.deepEqual(await search.searchCalls.call(calls), {
+		results: [{ name: '+911234 · missed · 2026-10-28 09:15', value: '7' }],
+		paginationToken: undefined,
+	});
+	assert.deepEqual(calls.requests[0].qs, { page: 1, limit: 10 });
+
+	const tasks = executeContext({
+		items: [],
+		respond: () => ({
+			data: [
+				{ id: 1, contact_name: 'Asha', description: 'Send brochure', due_date: '2026-10-29' },
+				{ id: 2, contact_name: 'Ravi', type: 'CALL' },
+			],
+		}),
+	});
+	assert.deepEqual(await search.searchTasks.call(tasks, 'BROCHURE'), {
+		results: [{ name: 'Asha · Send brochure · due 2026-10-29', value: '1' }],
+	});
+	assert.deepEqual(tasks.requests[0].qs, { status: 'PENDING' });
 });

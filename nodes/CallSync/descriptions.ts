@@ -35,6 +35,46 @@ const crmPicklist = (displayName: string, name: string, method: string): INodePr
 		'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 });
 
+/** Picks a record from a searchable list, or takes its numeric ID (for example from an expression). */
+const recordLocator = (
+	displayName: string,
+	name: string,
+	searchListMethod: string,
+	displayOptions: INodeProperties['displayOptions'],
+	description?: string,
+): INodeProperties => ({
+	displayName,
+	name,
+	type: 'resourceLocator',
+	required: true,
+	default: { mode: 'list', value: '' },
+	displayOptions,
+	...(description ? { description } : {}),
+	modes: [
+		{
+			displayName: 'From List',
+			name: 'list',
+			type: 'list',
+			typeOptions: { searchListMethod, searchable: true },
+		},
+		{
+			displayName: 'By ID',
+			name: 'id',
+			type: 'string',
+			placeholder: 'e.g. 42',
+			validation: [
+				{
+					type: 'regex',
+					properties: {
+						regex: '^[0-9]+$',
+						errorMessage: `Enter the ${displayName.toLowerCase()} ID, which is a number`,
+					},
+				},
+			],
+		},
+	],
+});
+
 const contactFields: INodeProperties[] = [
 	{
 		displayName: 'About',
@@ -49,7 +89,7 @@ const contactFields: INodeProperties[] = [
 		displayName: 'Email',
 		name: 'email',
 		type: 'string',
-		placeholder: 'name@email.com',
+		placeholder: 'e.g. nathan@example.com',
 		default: '',
 	},
 	{
@@ -157,15 +197,13 @@ export const callProperties: INodeProperties[] = [
 		],
 		default: 'getAll',
 	},
-	{
-		displayName: 'Call ID',
-		name: 'callId',
-		type: 'string',
-		required: true,
-		displayOptions: show('call', ['getAnalysis']),
-		default: '',
-		description: 'The call_id from a CallSync Trigger event or from Get Many Calls',
-	},
+	recordLocator(
+		'Call',
+		'callId',
+		'searchCalls',
+		show('call', ['getAnalysis']),
+		'Pick a recent call, or use the call_id from a CallSync Trigger event',
+	),
 	...returnAllAndLimit('call'),
 	{
 		displayName: 'Filters',
@@ -234,7 +272,7 @@ export const contactProperties: INodeProperties[] = [
 		type: 'string',
 		required: true,
 		displayOptions: show('contact', ['create']),
-		placeholder: '+919876543210',
+		placeholder: 'e.g. +919876543210',
 		default: '',
 		description: 'An existing caller with this number is linked instead of duplicated',
 	},
@@ -247,14 +285,7 @@ export const contactProperties: INodeProperties[] = [
 		default: {},
 		options: contactFields,
 	},
-	{
-		displayName: 'Contact ID',
-		name: 'contactId',
-		type: 'number',
-		required: true,
-		displayOptions: show('contact', ['update']),
-		default: 0,
-	},
+	recordLocator('Contact', 'contactId', 'searchContacts', show('contact', ['update'])),
 	{
 		displayName: 'Update Fields',
 		name: 'updateFields',
@@ -325,15 +356,13 @@ export const taskProperties: INodeProperties[] = [
 		],
 		default: 'create',
 	},
-	{
-		displayName: 'Contact ID',
-		name: 'contactId',
-		type: 'number',
-		required: true,
-		displayOptions: show('task', ['create']),
-		default: 0,
-		description: 'The CRM contact the task is for',
-	},
+	recordLocator(
+		'Contact',
+		'contactId',
+		'searchContacts',
+		show('task', ['create']),
+		'The CRM contact the task is for',
+	),
 	{
 		displayName: 'Type',
 		name: 'type',
@@ -351,14 +380,13 @@ export const taskProperties: INodeProperties[] = [
 		default: {},
 		options: taskFields,
 	},
-	{
-		displayName: 'Task ID',
-		name: 'taskId',
-		type: 'number',
-		required: true,
-		displayOptions: show('task', ['update']),
-		default: 0,
-	},
+	recordLocator(
+		'Task',
+		'taskId',
+		'searchTasks',
+		show('task', ['update']),
+		'Pick a pending task, or enter the ID of any task',
+	),
 	{
 		displayName: 'Update Fields',
 		name: 'updateFields',
@@ -431,14 +459,7 @@ export const noteProperties: INodeProperties[] = [
 		],
 		default: 'create',
 	},
-	{
-		displayName: 'Contact ID',
-		name: 'contactId',
-		type: 'number',
-		required: true,
-		displayOptions: show('note', ['create']),
-		default: 0,
-	},
+	recordLocator('Contact', 'contactId', 'searchContacts', show('note', ['create'])),
 	{
 		displayName: 'Type',
 		name: 'type',

@@ -6,7 +6,7 @@ CallSync records and syncs your team's business calls from their Android phones,
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
-[Installation](#installation) · [Operations](#operations) · [Credentials](#credentials) · [Compatibility](#compatibility) · [Usage](#usage) · [Resources](#resources)
+[Installation](#installation) · [Operations](#operations) · [Credentials](#credentials) · [Compatibility](#compatibility) · [Usage](#usage) · [Example workflows](#example-workflows) · [Resources](#resources)
 
 ## Installation
 
@@ -51,9 +51,29 @@ Built with `@n8n/node-cli` 0.54 against `n8n-workflow` 2.16. Requires an n8n ver
 ## Usage
 
 - Trigger items are the event exactly as CallSync sends it: `event`, `timestamp`, `org_id`, `payload_id` and `data` (with `call_id`, `staff`, `caller`, `call_details` and `automation` for call events).
+- **Call**, **Contact** and **Task** fields let you pick from a searchable list, or switch to **By ID** and use an expression such as `{{ $json.data.call_id }}`.
 - Use **Call → Get AI Analysis** with the trigger's `data.call_id` to fetch a summary later.
 - Task **Due** keeps the date and time you enter, so 10:00 stays 10:00 for the team.
 - Fields left blank are not sent, so an update never wipes saved data by accident.
+
+## Example workflows
+
+**Missed-call alert**
+
+1. **CallSync Trigger** with the event **Call Logged**.
+2. **If** `{{ $json.data.call_details.type }}` is equal to `missed`.
+3. A **Slack**, **Telegram** or **Gmail** node with the message `Missed call from {{ $json.data.caller.name }} ({{ $json.data.caller.phone }}), handled by {{ $json.data.staff.name }}`.
+
+**AI call summaries in a sheet**
+
+1. **CallSync Trigger** with the event **AI Analysis Ready**.
+2. **Google Sheets → Append Row** with columns for `{{ $json.data.caller.phone }}`, `{{ $json.data.automation.ai_summary }}` and `{{ $json.data.automation.suggested_next_action }}`.
+
+**Follow-up task after every answered call**
+
+1. **CallSync Trigger** with the event **Call Logged**, then **If** `{{ $json.data.call_details.type }}` is equal to `answered`.
+2. **CallSync → Contact → Get Many** with **Limit** 1 and the filter **Search** set to `{{ $json.data.caller.phone }}`.
+3. **CallSync → Task → Create** with **Contact** set to **By ID** `{{ $json.id }}`, **Type** Follow Up and **Due** `{{ $now.plus({ days: 1 }) }}`.
 
 ## Resources
 

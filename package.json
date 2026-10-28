@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-callsync",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "n8n nodes for CallSync: trigger workflows on new calls, recordings, AI call summaries and contact changes, and manage CallSync CRM contacts, tasks and notes.",
 	"license": "MIT",
 	"homepage": "https://callsyncapp.com",

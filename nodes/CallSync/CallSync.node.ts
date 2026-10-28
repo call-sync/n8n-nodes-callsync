@@ -3,6 +3,7 @@ import type {
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodeListSearchResult,
 	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
@@ -79,6 +80,51 @@ async function crmOptions(
 	}));
 }
 
+/** One page of a searchable list; the API returns at most 10 records per page. */
+async function searchPage(
+	this: ILoadOptionsFunctions,
+	path: string,
+	filter: string | undefined,
+	paginationToken: string | undefined,
+	label: (record: IDataObject) => string,
+): Promise<INodeListSearchResult> {
+	const page = Number(paginationToken) || 1;
+	const response = await callSyncRequest.call(this, 'GET', path, undefined, {
+		page,
+		limit: 10,
+		...(filter ? { search: filter } : {}),
+	});
+	const records = (response.data as IDataObject[]) || [];
+	const total = Number(
+		(response.pagination as IDataObject | undefined)?.total ?? response.total ?? 0,
+	);
+	return {
+		results: records.map((record) => ({ name: label(record), value: String(record.id) })),
+		paginationToken: records.length === 10 && page * 10 < total ? String(page + 1) : undefined,
+	};
+}
+
+const joined = (...parts: unknown[]) => parts.filter(Boolean).join(' · ');
+
+const PICKER_NAMES: Record<string, string> = {
+	callId: 'Call',
+	contactId: 'Contact',
+	taskId: 'Task',
+};
+
+/** Reads a record picker's ID, whether picked from the list or typed in. */
+function recordId(context: IExecuteFunctions, name: string, itemIndex: number): number {
+	const value = context.getNodeParameter(name, itemIndex, '', { extractValue: true });
+	const id = Number(value);
+	if (!Number.isInteger(id) || id <= 0)
+		throw new NodeOperationError(
+			context.getNode(),
+			`'${String(value)}' in '${PICKER_NAMES[name]}' is not a CallSync ID`,
+			{ description: 'Pick a record from the list, or enter its numeric ID', itemIndex },
+		);
+	return id;
+}
+
 export class CallSync implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'CallSync',
@@ -125,6 +171,59 @@ export class CallSync implements INodeType {
 				return crmOptions.call(this, 'sources');
 			},
 		},
+		listSearch: {
+			async searchCalls(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				return searchPage.call(this, 'calls', filter, paginationToken, (call) => {
+					const caller = (call.caller as IDataObject | undefined) ?? {};
+					const name = caller.name && caller.name !== 'Unknown' ? caller.name : caller.phone;
+					return joined(
+						name,
+						call.direction,
+						String(call.time ?? '')
+							.slice(0, 16)
+							.replace('T', ' '),
+					);
+				});
+			},
+			async searchContacts(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				return searchPage.call(
+					this,
+					'crm/contacts',
+					filter,
+					paginationToken,
+					(contact) => joined(contact.name, contact.phone) || String(contact.id),
+				);
+			},
+			async searchTasks(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+			): Promise<INodeListSearchResult> {
+				const tasks =
+					((await callSyncRequest.call(this, 'GET', 'crm/tasks', undefined, { status: 'PENDING' }))
+						.data as IDataObject[]) || [];
+				const search = filter?.toLowerCase();
+				return {
+					results: tasks
+						.map((task) => ({
+							name: joined(
+								task.contact_name,
+								task.description || task.type,
+								task.due_date && `due ${task.due_date}`,
+							),
+							value: String(task.id),
+						}))
+						.filter((task) => !search || task.name.toLowerCase().includes(search)),
+				};
+			},
+		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -151,7 +250,7 @@ export class CallSync implements INodeType {
 					);
 				} else if (resource === 'call' && operation === 'getAnalysis') {
 					const response = await callSyncRequest.call(this, 'GET', 'analysis', undefined, {
-						call_id: this.getNodeParameter('callId', i) as string,
+						call_id: recordId(this, 'callId', i),
 					});
 					result = response.data as IDataObject;
 				} else if (resource === 'contact' && operation === 'create') {
@@ -163,7 +262,7 @@ export class CallSync implements INodeType {
 						.data as IDataObject;
 				} else if (resource === 'contact' && operation === 'update') {
 					const body = requireUpdate(this, toApiFields(fields('updateFields')), i);
-					body.id = this.getNodeParameter('contactId', i) as number;
+					body.id = recordId(this, 'contactId', i);
 					result = (await callSyncRequest.call(this, 'PUT', 'crm/contacts', body))
 						.data as IDataObject;
 				} else if (resource === 'contact' && operation === 'getAll') {
@@ -176,14 +275,14 @@ export class CallSync implements INodeType {
 				} else if (resource === 'task' && operation === 'create') {
 					const body = {
 						...toApiFields(fields('additionalFields')),
-						person_id: this.getNodeParameter('contactId', i) as number,
+						person_id: recordId(this, 'contactId', i),
 						type: this.getNodeParameter('type', i) as string,
 					};
 					result = (await callSyncRequest.call(this, 'POST', 'crm/tasks', body))
 						.data as IDataObject;
 				} else if (resource === 'task' && operation === 'update') {
 					const body = requireUpdate(this, toApiFields(fields('updateFields')), i);
-					body.id = this.getNodeParameter('taskId', i) as number;
+					body.id = recordId(this, 'taskId', i);
 					result = (await callSyncRequest.call(this, 'PUT', 'crm/tasks', body)).data as IDataObject;
 				} else if (resource === 'task' && operation === 'getAll') {
 					const filters = fields('filters');
@@ -200,7 +299,7 @@ export class CallSync implements INodeType {
 				} else if (resource === 'note' && operation === 'create') {
 					const body = {
 						...toApiFields(fields('additionalFields')),
-						person_id: this.getNodeParameter('contactId', i) as number,
+						person_id: recordId(this, 'contactId', i),
 						type: this.getNodeParameter('type', i) as string,
 						title: this.getNodeParameter('title', i) as string,
 					};
@@ -253,7 +352,8 @@ function requireUpdate(
 	itemIndex: number,
 ): IDataObject {
 	if (!Object.keys(body).length)
-		throw new NodeOperationError(context.getNode(), 'Add at least one field to update', {
+		throw new NodeOperationError(context.getNode(), 'Nothing to update', {
+			description: "Add at least one field under 'Update Fields'",
 			itemIndex,
 		});
 	return body;

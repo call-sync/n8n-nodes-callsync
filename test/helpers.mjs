@@ -95,7 +95,11 @@ export function executeContext({ items, respond, continueOnFail = false }) {
 		getNode: () => node,
 		getCredentials: async () => CREDENTIALS,
 		getInputData: () => items.map(() => ({ json: {} })),
-		getNodeParameter: (name, i, fallback) => items[i][name] ?? fallback,
+		// Like n8n, extractValue unwraps a record picker ({ __rl, mode, value }) to its value.
+		getNodeParameter: (name, i, fallback, options) => {
+			const value = items[i][name] ?? fallback;
+			return options?.extractValue && value?.__rl ? value.value : value;
+		},
 		continueOnFail: () => continueOnFail,
 	};
 }
